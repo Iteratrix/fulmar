@@ -4,6 +4,7 @@
 //! in `docs/cli-design.md`; the API routing map in
 //! `docs/api-inventory.md`.
 
+pub mod api;
 pub mod identifiers;
 pub mod session;
 

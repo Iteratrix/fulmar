@@ -182,10 +182,13 @@ impl SessionStore {
     ///
     /// [`SessionError::Io`] when the lock file cannot be opened or
     /// locked.
-    pub fn exclusive(&self) -> Result<SessionGuard<'_>, SessionError> {
+    pub fn exclusive(&self) -> Result<SessionGuard, SessionError> {
         let lock = self.open_lock()?;
         lock.lock().map_err(|source| self.io_err(source))?;
-        Ok(SessionGuard { store: self, lock })
+        Ok(SessionGuard {
+            store: self.clone(),
+            lock,
+        })
     }
 
     /// Remove the session file and its lock file.
@@ -278,15 +281,18 @@ impl SessionStore {
 }
 
 /// Exclusive hold on the session lock file. The advisory lock is
-/// released when this guard drops (closing the lock fd).
+/// released when this guard drops (closing the lock fd). Owns a
+/// clone of the store (two `PathBuf`s) so it can cross thread
+/// boundaries — the refresh path acquires it inside
+/// `spawn_blocking`.
 #[derive(Debug)]
-pub struct SessionGuard<'a> {
-    store: &'a SessionStore,
+pub struct SessionGuard {
+    store: SessionStore,
     #[allow(dead_code)]
     lock: File,
 }
 
-impl SessionGuard<'_> {
+impl SessionGuard {
     /// Re-read the session file fresh (never a cached fd — see the
     /// module docs on rename-vs-inode).
     ///
