@@ -162,7 +162,18 @@ fn live_write_post_lifecycle() {
     let created: serde_json::Value = serde_json::from_str(&created).expect("json");
     let uri = created["uri"].as_str().expect("post uri").to_string();
 
-    let view = require_ok(&session, &["view", &uri, "--json"]);
+    // The AppView indexes asynchronously; a fresh post may 404 for a
+    // beat. Retry the read briefly rather than flaking.
+    let mut view = String::new();
+    for attempt in 0..5 {
+        let (code, stdout, _) = fulmar(&session, &["view", &uri, "--json"]);
+        if code == 0 {
+            view = stdout;
+            break;
+        }
+        assert!(attempt < 4, "post never became visible: {uri}");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
     assert!(
         view.contains("fulmarSelfTest"),
         "posted text should be visible"

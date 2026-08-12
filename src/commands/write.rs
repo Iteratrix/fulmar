@@ -491,34 +491,93 @@ async fn subject_record(ctx: &Ctx, post: &str, collection: &str, verb: &str) -> 
 }
 
 pub async fn unlike(ctx: &Ctx, post: &str) -> anyhow::Result<()> {
-    undo_viewer_record(ctx, post, "like", "unliked").await
+    undo_viewer_record(ctx, post, "like", "app.bsky.feed.like", "unliked").await
 }
 
 pub async fn unrepost(ctx: &Ctx, post: &str) -> anyhow::Result<()> {
-    undo_viewer_record(ctx, post, "repost", "unreposted").await
+    undo_viewer_record(ctx, post, "repost", "app.bsky.feed.repost", "unreposted").await
 }
 
 /// The post view's `viewer` block carries the URI of *your* like or
-/// repost record — no scan needed to undo.
+/// repost record — no scan needed to undo. But the `AppView` is
+/// eventually consistent: like-then-immediately-unlike (an agent at
+/// machine speed) sees no viewer state yet. The caller's own repo IS
+/// read-your-writes consistent, and a just-created record sits at
+/// the head of its collection — so fall back to the newest page of
+/// our own records before declaring there's nothing to undo.
 async fn undo_viewer_record(
     ctx: &Ctx,
     post: &str,
     viewer_key: &str,
+    collection: &str,
     verb: &str,
 ) -> anyhow::Result<()> {
     let client = ctx.client()?;
     let uri = client.resolve_post_uri(post).await?;
     let view = client.get_post_view(&uri).await?;
-    let Some(record_uri) = view
+    let record_uri = match view
         .get("viewer")
         .and_then(|v| v.get(viewer_key))
         .and_then(Value::as_str)
-    else {
-        anyhow::bail!("you have no {viewer_key} on that post");
+    {
+        Some(record_uri) => record_uri.to_string(),
+        None => find_own_record(&client, collection, |record| {
+            record
+                .get("subject")
+                .and_then(|s| s.get("uri"))
+                .and_then(Value::as_str)
+                == Some(uri.as_str())
+        })
+        .await?
+        .with_context(|| format!("you have no {viewer_key} on that post"))?,
     };
     delete_record_at(&client, &AtUri::parse(record_uri)?).await?;
     ctx.out.confirm(verb);
     Ok(())
+}
+
+/// Scan the first page (100) of one of our own collections — in both
+/// sort orders, so the newest record is covered without assuming the
+/// server's default — for a record matching `predicate`; returns its
+/// at:// URI. One page per direction is deliberate: this exists to
+/// catch `AppView` indexing lag on records created moments ago, not to
+/// be a general search.
+async fn find_own_record(
+    client: &Client,
+    collection: &str,
+    predicate: impl Fn(&Value) -> bool,
+) -> anyhow::Result<Option<String>> {
+    let me = client.did().await;
+    for reverse in ["false", "true"] {
+        let value = client
+            .get(
+                &Route::Pds,
+                "com.atproto.repo.listRecords",
+                &[
+                    ("repo", me.as_str().to_string()),
+                    ("collection", collection.to_string()),
+                    ("limit", "100".to_string()),
+                    ("reverse", reverse.to_string()),
+                ],
+            )
+            .await?;
+        let records = value
+            .get("records")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let found = records.iter().find_map(|item| {
+            let record = item.get("value")?;
+            if !predicate(record) {
+                return None;
+            }
+            Some(item.get("uri")?.as_str()?.to_string())
+        });
+        if found.is_some() {
+            return Ok(found);
+        }
+    }
+    Ok(None)
 }
 
 pub async fn follow(ctx: &Ctx, actor: &str) -> anyhow::Result<()> {
@@ -548,19 +607,28 @@ pub async fn block(ctx: &Ctx, actor: &str) -> anyhow::Result<()> {
 }
 
 pub async fn unfollow(ctx: &Ctx, actor: &str) -> anyhow::Result<()> {
-    undo_profile_record(ctx, actor, "following", "unfollowed").await
+    undo_profile_record(
+        ctx,
+        actor,
+        "following",
+        "app.bsky.graph.follow",
+        "unfollowed",
+    )
+    .await
 }
 
 pub async fn unblock(ctx: &Ctx, actor: &str) -> anyhow::Result<()> {
-    undo_profile_record(ctx, actor, "blocking", "unblocked").await
+    undo_profile_record(ctx, actor, "blocking", "app.bsky.graph.block", "unblocked").await
 }
 
 /// The profile view's `viewer` block carries the URI of your follow
-/// or block record.
+/// or block record — with the same eventual-consistency fallback as
+/// [`undo_viewer_record`].
 async fn undo_profile_record(
     ctx: &Ctx,
     actor: &str,
     viewer_key: &str,
+    collection: &str,
     verb: &str,
 ) -> anyhow::Result<()> {
     let client = ctx.client()?;
@@ -572,12 +640,17 @@ async fn undo_profile_record(
             &[("actor", did.as_str().to_string())],
         )
         .await?;
-    let Some(record_uri) = profile
+    let record_uri = match profile
         .get("viewer")
         .and_then(|v| v.get(viewer_key))
         .and_then(Value::as_str)
-    else {
-        anyhow::bail!("no {viewer_key} relationship with {actor}");
+    {
+        Some(record_uri) => record_uri.to_string(),
+        None => find_own_record(&client, collection, |record| {
+            record.get("subject").and_then(Value::as_str) == Some(did.as_str())
+        })
+        .await?
+        .with_context(|| format!("no {viewer_key} relationship with {actor}"))?,
     };
     delete_record_at(&client, &AtUri::parse(record_uri)?).await?;
     ctx.out.confirm(verb);
