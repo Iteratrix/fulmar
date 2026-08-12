@@ -191,6 +191,18 @@ normal). One write test exists behind `FULMAR_LIVE_WRITE=1`: it
 posts, likes, unlikes, and deletes its own post, leaving the account
 as it found it — even so, point it ONLY at a dedicated test account.
 
+**Pre-commit hook**: `git config core.hooksPath .githooks` enables
+fmt/clippy/test before every commit, plus the live read tier whenever
+`FULMAR_LIVE_SESSION` is exported in your shell.
+
+**Live tests in CI**: create a dedicated test account, then add two
+repository secrets — `FULMAR_TEST_IDENTIFIER` (the handle) and
+`FULMAR_TEST_PASSWORD` (an app password with DM access). The `Live`
+job logs in fresh each run (a session file can't be a static secret:
+refresh tokens rotate on use, so a stored session would sever its own
+chain on the second run) and runs the full suite including the write
+tier. With the secrets absent, the job skips and stays green.
+
 Releases are built by cargo-dist on tag push (`vX.Y.Z`).
 
 ## License

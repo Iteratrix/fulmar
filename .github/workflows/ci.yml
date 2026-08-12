@@ -39,6 +39,36 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  live:
+    name: Live (real network)
+    runs-on: ubuntu-latest
+    # Not on PRs: fork PRs have no secrets, and live flake shouldn't
+    # block review. The step itself skips cleanly when the secrets
+    # aren't configured.
+    if: github.event_name != 'pull_request'
+    env:
+      FULMAR_TEST_IDENTIFIER: ${{ secrets.FULMAR_TEST_IDENTIFIER }}
+      FULMAR_PASSWORD: ${{ secrets.FULMAR_TEST_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Login fresh and run the live suite
+        # A fresh createSession per run is deliberate: ephemeral
+        # runners can't persist a refresh chain, and a session file
+        # stored as a static secret would sever its own chain on the
+        # second run (refresh tokens rotate on use). The app password
+        # of the DEDICATED TEST ACCOUNT lives in the two secrets
+        # above; write-tier tests are enabled because the account
+        # exists for exactly this.
+        run: |
+          if [ -z "$FULMAR_PASSWORD" ] || [ -z "$FULMAR_TEST_IDENTIFIER" ]; then
+            echo "FULMAR_TEST_IDENTIFIER / FULMAR_TEST_PASSWORD secrets not configured; skipping live suite"
+            exit 0
+          fi
+          cargo build
+          ./target/debug/fulmar --session "$RUNNER_TEMP/live-session.json" login "$FULMAR_TEST_IDENTIFIER"
+          FULMAR_LIVE_SESSION="$RUNNER_TEMP/live-session.json" FULMAR_LIVE_WRITE=1 cargo test --test live
+
   test-macos:
     name: Tests (macOS arm64)
     runs-on: macos-latest

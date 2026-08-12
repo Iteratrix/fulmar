@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# fulmar pre-commit: the same wall CI enforces, locally.
+# Enable with: git config core.hooksPath .githooks
+#
+# If FULMAR_LIVE_SESSION is set (a seeded session file), the live
+# read-tier suite also runs against the real network. Unset = skipped,
+# so CI and credential-less clones are unaffected.
+set -e
+
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --quiet
+
+if [ -n "${FULMAR_LIVE_SESSION}" ]; then
+    echo "pre-commit: live suite (session: ${FULMAR_LIVE_SESSION})"
+    cargo test --quiet --test live
+fi
