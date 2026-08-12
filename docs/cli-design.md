@@ -1,7 +1,10 @@
-# fulmar CLI design (draft for review)
+# fulmar CLI design
 
-Status: draft, 2026-08-11. Cross-checked against docs/api-inventory.md
-(lexicons @ 68aaad8); routing and auth facts cited from there.
+Status: implemented, 2026-08-11. Cross-checked against
+docs/api-inventory.md (lexicons @ 68aaad8); routing and auth facts
+cited from there. The shipped grammar is authoritative in
+`src/cli.rs` / `fulmar --help`; deviations from this doc are noted
+in "Settled questions" at the bottom.
 
 ## Conventions (apply to every command)
 
@@ -190,14 +193,19 @@ Group *management* gets its own family:
   `fulmar firehose` streaming NDJSON; agents poll `dm log` +
   `notifs` in the meantime.
 
-## Open questions
+## Settled questions (as implemented)
 
-1. `view` vs `show` vs splitting `thread` (read) / `thread post`
-   (write) — naming collision to resolve.
-2. Trailing `{"cursor":...}` line vs cursor on stderr vs
-   `--cursor-file`. Draft picks the trailing line.
-3. `notifs` vs `notifications` (alias both?).
-4. Does `search --users` deserve its own subcommand?
-5. `fulmar api` flag grammar: mirror `gh api` (`-f`/`-F`, stdin body)
-   exactly, or simplify? Mirroring buys familiarity for agents
-   trained on gh.
+1. Reading a thread is `fulmar view` (alias `show`); composing one is
+   `fulmar thread`. No collision.
+2. Cursor protocol: trailing `{"cursor":...}` line in `--json` mode;
+   stderr hint in human mode. `--all` suppresses the trailing line.
+3. `notifs`, with `notifications` as a visible alias.
+4. User search is `search --users` (no separate subcommand).
+5. `fulmar api` uses a simplified grammar: `-f key=value` repeatable
+   (values parsed as JSON when possible), `--post` to force a
+   procedure, JSON body from piped stdin, `--proxy chat|video|<raw>`.
+6. Pagination is a plain cursor loop rather than a `Stream`
+   abstraction — same behavior, less machinery.
+7. Video uses `getServiceAuth` + direct calls to `video.bsky.app`;
+   chat uses the direct-to-`api.bsky.chat` route with the proxy
+   header (the reference client's battle-tested path).
