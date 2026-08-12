@@ -119,6 +119,33 @@ impl Default for ClientOptions {
     }
 }
 
+impl ClientOptions {
+    /// Defaults, overridable by `FULMAR_CHAT_URL`, `FULMAR_PLC_URL`,
+    /// `FULMAR_VIDEO_URL`, and `FULMAR_TIMEOUT` (seconds). For tests
+    /// and self-hosted service deployments; normal use never sets
+    /// these.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let mut options = Self::default();
+        if let Ok(url) = std::env::var("FULMAR_CHAT_URL") {
+            options.chat_url = url;
+        }
+        if let Ok(url) = std::env::var("FULMAR_PLC_URL") {
+            options.plc_url = url;
+        }
+        if let Ok(url) = std::env::var("FULMAR_VIDEO_URL") {
+            options.video_url = url;
+        }
+        if let Some(secs) = std::env::var("FULMAR_TIMEOUT")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            options.http_timeout = std::time::Duration::from_secs(secs);
+        }
+        options
+    }
+}
+
 /// Wire shape of `createSession` / `refreshSession` responses.
 #[derive(Debug, Clone, Deserialize)]
 struct WireSession {

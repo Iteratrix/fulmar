@@ -42,6 +42,7 @@ fn render_list(value: &Value) -> String {
     format!("{name} ({purpose}, {count} members) · {uri}")
 }
 
+#[allow(clippy::too_many_lines)] // dispatch table; splitting it would obscure the grammar
 pub async fn list(ctx: &Ctx, cmd: ListCmd) -> anyhow::Result<()> {
     let client = ctx.client()?;
     match cmd {

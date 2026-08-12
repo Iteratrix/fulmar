@@ -54,7 +54,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     } = cli;
     let ctx = Ctx {
         store: SessionStore::resolve(session)?,
-        options: ClientOptions::default(),
+        options: ClientOptions::from_env(),
         out: Output::new(json),
     };
 

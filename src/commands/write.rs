@@ -385,7 +385,7 @@ async fn apply_gates(
             match gate.as_str() {
                 "nobody" => {}
                 "mentioned" => {
-                    allow.push(json!({ "$type": "app.bsky.feed.threadgate#mentionRule" }))
+                    allow.push(json!({ "$type": "app.bsky.feed.threadgate#mentionRule" }));
                 }
                 "following" => {
                     allow.push(json!({ "$type": "app.bsky.feed.threadgate#followingRule" }));

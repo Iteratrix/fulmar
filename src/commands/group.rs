@@ -10,6 +10,7 @@ use crate::api::{Client, Route};
 use crate::cli::GroupCmd;
 use crate::output::render_raw;
 
+#[allow(clippy::too_many_lines)] // dispatch table; splitting it would obscure the grammar
 pub async fn group(ctx: &Ctx, cmd: GroupCmd) -> anyhow::Result<()> {
     let client = ctx.client()?;
     match cmd {
