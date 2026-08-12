@@ -8,6 +8,11 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/Iteratrix/fulmar"
 publish = false
 
+# publish = false (crates.io name is reserved for the final rename)
+# would hide the binary from cargo-dist without this.
+[package.metadata.dist]
+dist = true
+
 [workspace]
 exclude = ["reference"]
 
