@@ -174,6 +174,23 @@ adopt-don't-double-spend refresh race (in-process and as two real OS
 processes), and property tests for facet byte offsets on multibyte
 text.
 
+### Live tests (opt-in, real network)
+
+The mocked suite owns behavioral coverage; a small live suite checks
+the wiring against real servers — real PDS, real `api.bsky.chat`
+routing, real authed search. It needs a session file, not a password:
+
+```sh
+fulmar login you.bsky.social     # once
+FULMAR_LIVE_SESSION=~/.local/state/fulmar/session.json cargo test --test live
+```
+
+Without the env var every live test skips silently. The default tier
+is strictly read-only (it may rotate the session's tokens — that's
+normal). One write test exists behind `FULMAR_LIVE_WRITE=1`: it
+posts, likes, unlikes, and deletes its own post, leaving the account
+as it found it — even so, point it ONLY at a dedicated test account.
+
 Releases are built by cargo-dist on tag push (`vX.Y.Z`).
 
 ## License
