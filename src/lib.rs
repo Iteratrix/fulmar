@@ -5,6 +5,7 @@
 //! `docs/api-inventory.md`.
 
 pub mod api;
+pub mod facets;
 pub mod identifiers;
 pub mod session;
 

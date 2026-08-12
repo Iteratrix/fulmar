@@ -743,6 +743,7 @@ dependencies = [
  "predicates",
  "proptest",
  "psl",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
