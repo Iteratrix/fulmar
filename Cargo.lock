@@ -735,6 +735,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
+ "webpki-root-certs",
  "wiremock",
 ]
 

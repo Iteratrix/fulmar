@@ -132,9 +132,7 @@ pub async fn session(ctx: &Ctx, cmd: SessionCmd) -> anyhow::Result<()> {
 pub async fn resolve(ctx: &Ctx, actor: &str) -> anyhow::Result<()> {
     let client = ctx.client()?;
     let did = client.resolve_actor(actor).await?;
-    let http = reqwest::Client::builder()
-        .timeout(ctx.options.http_timeout)
-        .build()?;
+    let http = crate::api::http_client(ctx.options.http_timeout)?;
     let doc = identity::fetch_did_doc(&http, &ctx.options.plc_url, &did).await?;
     let pds = identity::pds_endpoint(&doc);
     let value = json!({

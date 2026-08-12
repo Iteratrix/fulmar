@@ -157,6 +157,7 @@ fulmar api chat.bsky.convo.getLog --proxy chat -f cursor=xyz
 | `FULMAR_PASSWORD` | Password for non-interactive `fulmar login` |
 | `FULMAR_CHAT_URL` / `FULMAR_PLC_URL` / `FULMAR_VIDEO_URL` | Service base overrides (tests, self-hosting) |
 | `FULMAR_TIMEOUT` | HTTP timeout in seconds (default 30) |
+| `FULMAR_NATIVE_ROOTS` | `1` = verify TLS via the OS trust store instead of the bundled Mozilla roots. Only needed for a custom PDS behind a private CA; costs sandbox-friendliness on macOS (the OS verifier XPCs to `trustd`, which Seatbelt-style sandboxes deny). |
 
 Custom PDSes need no configuration: `login` resolves your PDS
 endpoint from your DID document and stores it in the session file.

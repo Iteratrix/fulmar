@@ -146,6 +146,34 @@ impl ClientOptions {
     }
 }
 
+/// Build fulmar's HTTP client: rustls with the **bundled** Mozilla
+/// root store (`webpki-root-certs`) verified in-process, instead of
+/// reqwest 0.13's default `rustls-platform-verifier`. The platform
+/// verifier calls the OS trust machinery — on macOS an XPC hop to
+/// `trustd` via Security.framework — which sandboxes (Seatbelt
+/// profiles, the same lane that breaks `gh`) deny. Bundled roots
+/// keep TLS verification entirely inside the process.
+///
+/// Escape hatch: `FULMAR_NATIVE_ROOTS=1` restores the platform
+/// verifier for the one setup bundled roots can't serve — a custom
+/// PDS behind a private/enterprise CA (which must then run fulmar
+/// unsandboxed on macOS).
+///
+/// # Errors
+///
+/// [`ApiError::Http`] if the client cannot be built.
+pub fn http_client(timeout: std::time::Duration) -> Result<HttpClient, ApiError> {
+    let builder = HttpClient::builder().timeout(timeout);
+    if std::env::var("FULMAR_NATIVE_ROOTS").is_ok_and(|v| v == "1") {
+        return Ok(builder.build()?);
+    }
+    let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|der| reqwest::Certificate::from_der(der))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(builder.tls_certs_only(roots).build()?)
+}
+
 /// Wire shape of `createSession` / `refreshSession` responses.
 #[derive(Debug, Clone, Deserialize)]
 struct WireSession {
@@ -191,9 +219,7 @@ impl Client {
     /// [`ApiError::Http`] if the HTTP client cannot be built.
     pub fn from_store(store: SessionStore, options: &ClientOptions) -> Result<Self, ApiError> {
         let session = store.load()?;
-        let http = HttpClient::builder()
-            .timeout(options.http_timeout)
-            .build()?;
+        let http = http_client(options.http_timeout)?;
         Ok(Self {
             http,
             store,
@@ -222,9 +248,7 @@ impl Client {
         identifier: &str,
         password: &str,
     ) -> Result<Self, ApiError> {
-        let http = HttpClient::builder()
-            .timeout(options.http_timeout)
-            .build()?;
+        let http = http_client(options.http_timeout)?;
         let url = xrpc_url(service_url, "com.atproto.server.createSession");
         let body = serde_json::json!({ "identifier": identifier, "password": password });
         let resp = http.post(url).json(&body).send().await?;

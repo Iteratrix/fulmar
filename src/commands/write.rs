@@ -218,7 +218,10 @@ async fn build_media_embed(
 
 async fn load_image_source(source: &str) -> anyhow::Result<(Vec<u8>, String)> {
     if source.starts_with("http://") || source.starts_with("https://") {
-        let resp = reqwest::get(source)
+        let http = crate::api::http_client(std::time::Duration::from_secs(30))?;
+        let resp = http
+            .get(source)
+            .send()
             .await
             .with_context(|| format!("fetching image {source}"))?
             .error_for_status()
