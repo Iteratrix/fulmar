@@ -75,10 +75,11 @@ async fn history(
     let convo_id = client.resolve_convo(who).await?;
     if reverse {
         // Collect (respecting --limit/--all), then flip to oldest
-        // first. The wire order is newest-first.
+        // first — the wire order is newest-first. The resume cursor
+        // stays the LAST line even though items were reordered.
         let mut collected = Vec::new();
         let mut cursor = page.cursor.clone();
-        loop {
+        let resume = loop {
             let mut params = page_params(cursor.clone(), page.limit);
             params.push(("convoId", convo_id.clone()));
             let value = client
@@ -88,16 +89,14 @@ async fn history(
             let done = next.is_none() || items.is_empty() || !page.all;
             collected.extend(items);
             if done {
-                if !page.all {
-                    ctx.out.cursor(next.as_deref());
-                }
-                break;
+                break if page.all { None } else { next };
             }
             cursor = next;
-        }
+        };
         for item in collected.iter().rev() {
             ctx.out.item(item, render_message);
         }
+        ctx.out.cursor(resume.as_deref());
         return Ok(());
     }
     paginate(&ctx.out, page, render_message, |cursor, limit| {
