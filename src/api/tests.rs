@@ -37,6 +37,7 @@ fn options(chat_url: &str) -> ClientOptions {
     ClientOptions {
         chat_url: chat_url.to_string(),
         plc_url: "http://plc.invalid".to_string(),
+        video_url: "http://video.invalid".to_string(),
         http_timeout: Duration::from_secs(2),
     }
 }

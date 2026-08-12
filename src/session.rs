@@ -60,7 +60,7 @@ pub enum SessionError {
     Missing { path: PathBuf },
     #[error("session file {path} is corrupt ({detail}) — re-run `fulmar login` to replace it")]
     Corrupt { path: PathBuf, detail: String },
-    #[error("session file {path}: {source}")]
+    #[error("session file {path}")]
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -338,11 +338,14 @@ fn resolve_path(explicit: Option<PathBuf>, env: Option<PathBuf>) -> Result<PathB
     Ok(state_dir.join("fulmar").join("session.json"))
 }
 
+/// Create the session directory (0700) if absent. Never touches the
+/// permissions of a directory that already exists — the session file
+/// may legitimately live in a shared directory like `/tmp`.
 fn ensure_private_dir(dir: Option<&Path>) -> std::io::Result<()> {
     let Some(dir) = dir else {
         return Ok(());
     };
-    if dir.as_os_str().is_empty() {
+    if dir.as_os_str().is_empty() || dir.exists() {
         return Ok(());
     }
     fs::create_dir_all(dir)?;

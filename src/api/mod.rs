@@ -27,6 +27,7 @@
 //! service base URL rather than the PDS: `bsky.social` stopped
 //! proxying chat methods and returns 501 for them (observed 2026-05).
 
+pub mod helpers;
 pub mod identity;
 
 use reqwest::{Client as HttpClient, StatusCode};
@@ -47,6 +48,11 @@ pub const DEFAULT_CHAT_URL: &str = "https://api.bsky.chat";
 /// Default entryway for `fulmar login` when the handle doesn't
 /// resolve elsewhere.
 pub const DEFAULT_LOGIN_SERVICE: &str = "https://bsky.social";
+
+/// Video service base URL and its service DID.
+pub const DEFAULT_VIDEO_URL: &str = "https://video.bsky.app";
+/// DID of the Bluesky video service (service-auth audience).
+pub const VIDEO_SERVICE_DID: &str = "did:web:video.bsky.app";
 
 /// Errors surfaced by the client.
 #[derive(Debug, thiserror::Error)]
@@ -98,6 +104,7 @@ pub enum Route {
 pub struct ClientOptions {
     pub chat_url: String,
     pub plc_url: String,
+    pub video_url: String,
     pub http_timeout: std::time::Duration,
 }
 
@@ -106,6 +113,7 @@ impl Default for ClientOptions {
         Self {
             chat_url: DEFAULT_CHAT_URL.to_string(),
             plc_url: identity::PLC_DIRECTORY.to_string(),
+            video_url: DEFAULT_VIDEO_URL.to_string(),
             http_timeout: std::time::Duration::from_secs(30),
         }
     }
@@ -132,6 +140,7 @@ pub struct Client {
     session: RwLock<SessionFile>,
     refresh_serial: Mutex<()>,
     chat_url: String,
+    video_url: String,
 }
 
 impl std::fmt::Debug for Client {
@@ -164,6 +173,7 @@ impl Client {
             session: RwLock::new(session),
             refresh_serial: Mutex::new(()),
             chat_url: options.chat_url.clone(),
+            video_url: options.video_url.clone(),
         })
     }
 
@@ -219,6 +229,7 @@ impl Client {
             session: RwLock::new(session),
             refresh_serial: Mutex::new(()),
             chat_url: options.chat_url.clone(),
+            video_url: options.video_url.clone(),
         })
     }
 
@@ -314,6 +325,113 @@ impl Client {
     pub async fn force_refresh(&self) -> Result<(), ApiError> {
         let jwt = self.access_jwt().await;
         self.refresh(&jwt).await
+    }
+
+    /// Authed XRPC query returning the raw response body (CAR files,
+    /// blobs — anything non-JSON). Same refresh-and-retry discipline
+    /// as [`Client::get`].
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Client::get`].
+    pub async fn get_bytes(
+        &self,
+        route: &Route,
+        nsid: &str,
+        query: &[(&str, String)],
+    ) -> Result<Vec<u8>, ApiError> {
+        let jwt = self.access_jwt().await;
+        let (status, bytes) = self.send_once(route, nsid, query, None, &jwt).await?;
+        if is_session_expired(status, &bytes) {
+            self.refresh(&jwt).await?;
+            let jwt = self.access_jwt().await;
+            let (status, bytes) = self.send_once(route, nsid, query, None, &jwt).await?;
+            return decode_bytes(status, bytes);
+        }
+        decode_bytes(status, bytes)
+    }
+
+    /// Mint a short-lived service JWT for calling another service
+    /// directly (`aud` = service DID, `lxm` = the one method it may
+    /// call). Used for the video service.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Api`] / transport variants.
+    pub async fn service_auth(&self, aud: &str, lxm: &str) -> Result<String, ApiError> {
+        let value = self
+            .get(
+                &Route::Pds,
+                "com.atproto.server.getServiceAuth",
+                &[("aud", aud.to_string()), ("lxm", lxm.to_string())],
+            )
+            .await?;
+        value
+            .get("token")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .ok_or_else(|| ApiError::Unexpected("getServiceAuth response missing token".into()))
+    }
+
+    /// Upload a video to the video service. Returns the initial job
+    /// status (`jobId`, `state`, possibly a `blob` if processing was
+    /// instant or the video already exists).
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Api`] / transport variants.
+    pub async fn upload_video(&self, bytes: Vec<u8>, name: &str) -> Result<Value, ApiError> {
+        let token = self
+            .service_auth(VIDEO_SERVICE_DID, "app.bsky.video.uploadVideo")
+            .await?;
+        let did = self.did().await;
+        let url = xrpc_url(&self.video_url, "app.bsky.video.uploadVideo");
+        let resp = self
+            .http
+            .post(&url)
+            .query(&[("did", did.as_str()), ("name", name)])
+            .bearer_auth(&token)
+            .header("content-type", "video/mp4")
+            .body(bytes)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.bytes().await?;
+        // The service reports "video already processed" as a 409-ish
+        // structured error carrying the finished jobStatus — surface
+        // that as success so re-posting the same file works.
+        if !status.is_success() {
+            let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            if let Some(job) = parsed.get("jobStatus") {
+                return Ok(job.clone());
+            }
+            return decode_xrpc(status, &body);
+        }
+        let value: Value = decode_xrpc(status, &body)?;
+        Ok(value.get("jobStatus").cloned().unwrap_or(value))
+    }
+
+    /// Poll a video processing job.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Api`] / transport variants.
+    pub async fn video_job_status(&self, job_id: &str) -> Result<Value, ApiError> {
+        let token = self
+            .service_auth(VIDEO_SERVICE_DID, "app.bsky.video.getJobStatus")
+            .await?;
+        let url = xrpc_url(&self.video_url, "app.bsky.video.getJobStatus");
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("jobId", job_id)])
+            .bearer_auth(&token)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.bytes().await?;
+        let value: Value = decode_xrpc(status, &body)?;
+        Ok(value.get("jobStatus").cloned().unwrap_or(value))
     }
 
     async fn access_jwt(&self) -> String {
@@ -476,6 +594,17 @@ fn refresh_rejected(status: StatusCode, body: &[u8]) -> bool {
         return kind == Some("ExpiredToken") || kind == Some("InvalidToken");
     }
     false
+}
+
+fn decode_bytes(status: StatusCode, bytes: Vec<u8>) -> Result<Vec<u8>, ApiError> {
+    if status.is_success() {
+        return Ok(bytes);
+    }
+    let err: Result<Value, ApiError> = decode_xrpc(status, &bytes);
+    match err {
+        Err(e) => Err(e),
+        Ok(_) => Err(ApiError::Unexpected(format!("unexpected status {status}"))),
+    }
 }
 
 fn decode_xrpc<T: for<'de> Deserialize<'de>>(

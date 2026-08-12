@@ -5,8 +5,11 @@
 //! `docs/api-inventory.md`.
 
 pub mod api;
+pub mod cli;
+pub mod commands;
 pub mod facets;
 pub mod identifiers;
+pub mod output;
 pub mod session;
 
 pub use identifiers::{AtUri, Cid, Did, Handle, IdentifierError, RKey};
