@@ -81,6 +81,14 @@ fn flatten_replies(node: &Value, out: &mut Vec<Value>) {
     }
 }
 
+/// `fulmar me` — the author feed of the session's own account,
+/// straight from the session file (no resolution round-trip).
+pub async fn me(ctx: &Ctx, filter: &str, page: &PageArgs) -> anyhow::Result<()> {
+    let client = ctx.client()?;
+    let did = client.did().await;
+    author_feed(ctx, did.as_str(), filter, page).await
+}
+
 pub async fn author_feed(
     ctx: &Ctx,
     actor: &str,

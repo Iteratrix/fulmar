@@ -24,11 +24,23 @@ pub async fn post(
     ctx: &Ctx,
     text: &str,
     quote: Option<&str>,
+    link: Option<&str>,
+    dry_run: bool,
     compose: &ComposeArgs,
 ) -> anyhow::Result<()> {
     let client = ctx.client()?;
     let text = text_or_stdin(text)?;
-    let record = build_post_record(&client, &text, quote, compose, None).await?;
+    if dry_run {
+        anyhow::ensure!(
+            compose.image.is_empty() && compose.video.is_none(),
+            "--dry-run uploads nothing; remove --image/--video to preview the record"
+        );
+    }
+    let record = build_post_record(&client, &text, quote, link, dry_run, compose, None).await?;
+    if dry_run {
+        ctx.out.object(&record, crate::output::render_raw);
+        return Ok(());
+    }
     let created = create_record(&client, "app.bsky.feed.post", &record, None).await?;
     apply_gates(&client, &created, compose).await?;
     emit_created(ctx, &created);
@@ -49,7 +61,7 @@ pub async fn reply(
         "root": { "uri": refs.root.uri.as_str(), "cid": refs.root.cid.as_str() },
         "parent": { "uri": refs.parent.uri.as_str(), "cid": refs.parent.cid.as_str() },
     });
-    let record = build_post_record(&client, &text, None, compose, Some(reply)).await?;
+    let record = build_post_record(&client, &text, None, None, false, compose, Some(reply)).await?;
     let created = create_record(&client, "app.bsky.feed.post", &record, None).await?;
     emit_created(ctx, &created);
     Ok(())
@@ -77,7 +89,7 @@ pub async fn thread(ctx: &Ctx, texts: &[String]) -> anyhow::Result<()> {
             })),
             _ => None,
         };
-        let record = build_post_record(&client, &text, None, &compose, reply).await?;
+        let record = build_post_record(&client, &text, None, None, false, &compose, reply).await?;
         let created = create_record(&client, "app.bsky.feed.post", &record, None).await?;
         emit_created(ctx, &created);
         if root.is_none() {
@@ -88,10 +100,13 @@ pub async fn thread(ctx: &Ctx, texts: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // compose options funnel; a struct would just rename the problem
 async fn build_post_record(
     client: &Client,
     text: &str,
     quote: Option<&str>,
+    link: Option<&str>,
+    dry_run: bool,
     compose: &ComposeArgs,
     reply: Option<Value>,
 ) -> anyhow::Result<Value> {
@@ -122,7 +137,7 @@ async fn build_post_record(
     if let Some(reply) = reply {
         record["reply"] = reply;
     }
-    if let Some(embed) = build_embed(client, quote, compose).await? {
+    if let Some(embed) = build_embed(client, quote, link, dry_run, compose).await? {
         record["embed"] = embed;
     }
     Ok(record)
@@ -155,9 +170,14 @@ async fn detect_and_resolve_facets(client: &Client, text: &str) -> Vec<Value> {
 async fn build_embed(
     client: &Client,
     quote: Option<&str>,
+    link: Option<&str>,
+    dry_run: bool,
     compose: &ComposeArgs,
 ) -> anyhow::Result<Option<Value>> {
-    let media = build_media_embed(client, compose).await?;
+    let media = match link {
+        Some(url) => Some(build_external_embed(client, url, dry_run).await?),
+        None => build_media_embed(client, compose).await?,
+    };
     let quote_ref = match quote {
         Some(post) => {
             let uri = client.resolve_post_uri(post).await?;
@@ -214,6 +234,64 @@ async fn build_media_embed(
     Ok(Some(
         json!({ "$type": "app.bsky.embed.images", "images": images }),
     ))
+}
+
+/// Build an `app.bsky.embed.external` link card by fetching the
+/// page's `OpenGraph` metadata. The thumbnail is best-effort — any
+/// failure fetching, decoding, or uploading the image just omits it
+/// (a card without a thumb still posts). Dry runs still fetch the
+/// page (read-only) but never upload the thumb.
+async fn build_external_embed(client: &Client, url: &str, dry_run: bool) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        url.starts_with("http://") || url.starts_with("https://"),
+        "--link expects an http(s) URL, got {url}"
+    );
+    let http = crate::api::http_client(std::time::Duration::from_secs(30))?;
+    let html = http
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("fetching {url}"))?
+        .error_for_status()
+        .with_context(|| format!("fetching {url}"))?
+        .text()
+        .await
+        .with_context(|| format!("reading {url}"))?;
+    let card = crate::opengraph::extract(&html, url);
+    let mut external = json!({
+        "uri": url,
+        "title": card.title,
+        "description": card.description,
+    });
+    if !dry_run
+        && let Some(image_url) = card.image
+        && let Some(blob) = fetch_thumb(client, &http, &image_url).await
+    {
+        external["thumb"] = blob;
+    }
+    Ok(json!({ "$type": "app.bsky.embed.external", "external": external }))
+}
+
+async fn fetch_thumb(client: &Client, http: &reqwest::Client, image_url: &str) -> Option<Value> {
+    let resp = http
+        .get(image_url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_string();
+    let bytes = resp.bytes().await.ok()?.to_vec();
+    let prepared = prepare_image(bytes, &content_type).ok()?;
+    client
+        .upload_blob(prepared.bytes, &prepared.content_type)
+        .await
+        .ok()
 }
 
 async fn load_image_source(source: &str) -> anyhow::Result<(Vec<u8>, String)> {

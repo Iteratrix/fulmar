@@ -9,6 +9,7 @@ pub mod cli;
 pub mod commands;
 pub mod facets;
 pub mod identifiers;
+pub mod opengraph;
 pub mod output;
 pub mod session;
 

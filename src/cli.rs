@@ -56,7 +56,9 @@ pub struct PageArgs {
     #[arg(long, value_name = "N")]
     pub limit: Option<u32>,
 
-    /// Resume from a cursor printed by a previous invocation.
+    /// Resume from a cursor printed by a previous invocation. Opaque
+    /// server token — its shape varies by endpoint (timestamp-like,
+    /// base64, ...); always pass it back verbatim, never parse it.
     #[arg(long, value_name = "CURSOR")]
     pub cursor: Option<String>,
 
@@ -154,7 +156,9 @@ pub enum Command {
         fulmar post \"hello from fulmar\"\n  \
         echo \"multi\\nline\" | fulmar post -\n  \
         fulmar post \"look:\" --image photo.jpg --alt \"a fulmar gliding\"\n  \
+        fulmar post \"read this\" --link https://example.com/article\n  \
         fulmar post \"replies limited\" --reply-gate followers\n  \
+        fulmar post \"check facets\" --dry-run --json | jq .facets\n  \
         fulmar post \"quoting\" --quote at://did:plc:xxx/app.bsky.feed.post/yyy")]
     Post {
         /// Post text, or `-` for stdin.
@@ -162,6 +166,15 @@ pub enum Command {
         /// Quote another post (at:// URI or bsky.app URL).
         #[arg(long, value_name = "POST")]
         quote: Option<String>,
+        /// Attach a link card (app.bsky.embed.external): fetches the
+        /// page's OpenGraph title/description/image (best-effort).
+        #[arg(long, value_name = "URL", conflicts_with_all = ["image", "video"])]
+        link: Option<String>,
+        /// Build and print the full record (facets resolved, limits
+        /// validated) WITHOUT posting. Media flags are rejected —
+        /// nothing is uploaded in a dry run.
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         compose: ComposeArgs,
     },
@@ -261,9 +274,23 @@ pub enum Command {
         visible_alias = "tl",
         after_long_help = "Examples:\n  \
         fulmar timeline --limit 50 --json | jq -r '.post.record.text // empty'\n  \
-        fulmar timeline --json | jq -r '.cursor // empty' | tail -1   # resume point"
+        fulmar timeline --json | jq -r '.cursor // empty' | tail -1   # resume point\n\n\
+        JSON shape: each line is a feedViewPost — `.post` is always present;\n\
+        `.reply` appears only on replies and `.reason` only on reposts, so use\n\
+        `.post.record.text` (not `.record.text`) and guard optionals in jq."
     )]
     Timeline {
+        #[command(flatten)]
+        page: PageArgs,
+    },
+
+    /// Your own posts (shorthand for `posts <your handle>`).
+    Me {
+        /// Filter: posts_with_replies, posts_no_replies,
+        /// posts_with_media, posts_and_author_threads,
+        /// posts_with_video.
+        #[arg(long, default_value = "posts_with_replies")]
+        filter: String,
         #[command(flatten)]
         page: PageArgs,
     },
@@ -418,6 +445,13 @@ pub enum Command {
         /// Only unread notifications.
         #[arg(long)]
         unread_only: bool,
+        /// Fetch the subject post of like/repost/reply notifications
+        /// (one extra batched getPosts call per page). Human mode
+        /// shows a text snippet; --json adds a synthetic "$preview"
+        /// field (dollar-prefixed: injected by fulmar, not server
+        /// data).
+        #[arg(long)]
+        previews: bool,
         #[command(flatten)]
         page: PageArgs,
         #[command(subcommand)]
@@ -655,7 +689,9 @@ pub enum DmCmd {
         text: String,
     },
     /// Mark a conversation read (updateRead — do this after reading,
-    /// or unread counts lie forever).
+    /// or unread counts lie forever). To READ messages, use
+    /// `dm history`.
+    #[command(visible_alias = "mark-read")]
     Read {
         /// Handle, DID, or convo id. Omit with --all to mark every
         /// conversation read.

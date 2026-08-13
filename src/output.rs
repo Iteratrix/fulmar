@@ -159,7 +159,10 @@ pub fn render_profile(value: &Value) -> String {
     )
 }
 
-/// One-line notification rendering.
+/// One-line notification rendering. For like/repost the interesting
+/// URI is the *subject* (`reasonSubject` — the post that was acted
+/// on), not `uri` (the actor's like/repost record); with `--previews`
+/// the hydrated subject text is shown too.
 #[must_use]
 pub fn render_notification(value: &Value) -> String {
     let reason = value.get("reason").and_then(Value::as_str).unwrap_or("?");
@@ -179,9 +182,21 @@ pub fn render_notification(value: &Value) -> String {
         .and_then(|r| r.get("text"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    let uri = value.get("uri").and_then(Value::as_str).unwrap_or("");
-    let text = truncate(text, 100);
-    format!("{read} {reason:<9} @{author} · {time} · {uri}\n    {text}")
+    let uri = value
+        .get("reasonSubject")
+        .or_else(|| value.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let preview = value
+        .get("$preview")
+        .and_then(|p| p.get("text"))
+        .and_then(Value::as_str)
+        .map(|p| format!("\n    → {}", truncate(p, 100)))
+        .unwrap_or_default();
+    format!(
+        "{read} {reason:<9} @{author} · {time} · {uri}\n    {}{preview}",
+        truncate(text, 100)
+    )
 }
 
 /// DM conversation summary line.

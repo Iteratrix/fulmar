@@ -70,8 +70,20 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Post {
             text,
             quote,
+            link,
+            dry_run,
             compose,
-        } => write::post(&ctx, &text, quote.as_deref(), &compose).await,
+        } => {
+            write::post(
+                &ctx,
+                &text,
+                quote.as_deref(),
+                link.as_deref(),
+                dry_run,
+                &compose,
+            )
+            .await
+        }
         Command::Reply {
             post,
             text,
@@ -81,7 +93,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             post,
             text,
             compose,
-        } => write::post(&ctx, &text, Some(&post), &compose).await,
+        } => write::post(&ctx, &text, Some(&post), None, false, &compose).await,
         Command::Thread { texts } => write::thread(&ctx, &texts).await,
         Command::Delete { post } => write::delete_post(&ctx, &post).await,
         Command::Like { post } => write::like(&ctx, &post).await,
@@ -96,6 +108,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Unmute { actor } => write::unmute(&ctx, &actor).await,
 
         Command::Timeline { page } => read::timeline(&ctx, &page).await,
+        Command::Me { filter, page } => read::me(&ctx, &filter, &page).await,
         Command::View {
             post,
             depth,
@@ -176,9 +189,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Notifs {
             reason,
             unread_only,
+            previews,
             page,
             cmd,
-        } => notifs::notifs(&ctx, &reason, unread_only, &page, cmd).await,
+        } => notifs::notifs(&ctx, &reason, unread_only, previews, &page, cmd).await,
         Command::Watch { actor, replies } => notifs::watch(&ctx, &actor, replies).await,
         Command::Unwatch { actor } => notifs::unwatch(&ctx, &actor).await,
 

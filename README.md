@@ -104,8 +104,8 @@ always go to stderr.
 |---|---|
 | Session | `login` `whoami` `session show/refresh/delete` `resolve` |
 | Write | `post` `reply` `quote` `thread` `delete` `like/unlike` `repost/unrepost` `follow/unfollow` `block/unblock` `mute/unmute` |
-| Read | `timeline` `view` `posts` `profile` `followers` `following` `known-followers` `relationship` `blocks` `mutes` `search` `feed` `likes` `reposts` `quotes` `starterpacks` |
-| Notifications | `notifs` `notifs count` `notifs seen` `watch/unwatch` |
+| Read | `timeline` `me` `view` `posts` `profile` `followers` `following` `known-followers` `relationship` `blocks` `mutes` `search` `feed` `likes` `reposts` `quotes` `starterpacks` |
+| Notifications | `notifs` (`--previews` hydrates what was liked/reposted) `notifs count` `notifs seen` `watch/unwatch` |
 | DMs | `dm convos/history/send/read/log/unread/requests/accept/leave/mute/unmute/react` |
 | Groups | `group create/edit/add/remove/lock/unlock/link/preview/join/withdraw/requests/approve/reject/mutual` |
 | Lists | `lists` `list show/feed/create/add/remove/delete/mute/unmute/block/unblock/membership` |
@@ -116,10 +116,13 @@ always go to stderr.
 Posting is complete: automatic facets (links, @mentions, #tags,
 $cashtags — byte-correct offsets on any Unicode), up to 4 images with
 alt text (auto-downscaled under the 2MB blob limit), video (uploaded
-through the video service, processing awaited), quote posts, reply
-gates (`--reply-gate followers`), and quote gates (`--no-quotes`).
-Replies resolve the parent CID and thread root for you — paste any
-`at://` URI or `bsky.app` URL.
+through the video service, processing awaited), link cards
+(`--link URL` fetches OpenGraph title/description/thumbnail), quote
+posts, reply gates (`--reply-gate followers`), and quote gates
+(`--no-quotes`). `--dry-run` prints the fully built record — facets
+resolved, limits validated — without posting. Replies resolve the
+parent CID and thread root for you — paste any `at://` URI or
+`bsky.app` URL.
 
 ## Polling patterns for agents
 

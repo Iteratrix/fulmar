@@ -66,10 +66,14 @@ fn help_teaches() {
         (vec!["--help"], "Exit codes"),
         (vec!["post", "--help"], "fulmar post \"hello from fulmar\""),
         (vec!["dm", "read", "--help"], "updateRead"),
+        (vec!["dm", "mark-read", "--help"], "updateRead"),
         (vec!["dm", "log", "--help"], "Poll pattern"),
         (vec!["login", "--help"], "FULMAR_PASSWORD"),
         (vec!["prefs", "--help"], "get"),
         (vec!["api", "--help"], "chat.bsky.convo.getLog"),
+        (vec!["timeline", "--help"], "JSON shape"),
+        (vec!["me", "--help"], "shorthand"),
+        (vec!["notifs", "--help"], "$preview"),
     ] {
         let (code, stdout, _) = run(fulmar(&path.to_string_lossy()).args(&args));
         assert_eq!(code, 0, "args: {args:?}");
@@ -243,6 +247,139 @@ async fn not_found_exits_4() {
     .expect("join");
 
     assert_eq!(code, 4, "stderr: {stderr}");
+}
+
+/// `--dry-run` builds the complete record — facets resolved offline
+/// here (tag needs no lookup) — and never touches the network: the
+/// seeded PDS URL points at a dead port.
+#[test]
+fn post_dry_run_prints_record_without_posting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session = seed_session(&dir, "http://127.0.0.1:1", "access-1", "refresh-1");
+    let (code, stdout, stderr) = run(fulmar(&session).args([
+        "post",
+        "checking #facets before sending",
+        "--dry-run",
+        "--json",
+    ]));
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let record: serde_json::Value = serde_json::from_str(stdout.trim()).expect("record json");
+    assert_eq!(record["$type"], "app.bsky.feed.post");
+    assert_eq!(record["facets"][0]["features"][0]["tag"], "facets");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn me_fetches_own_author_feed() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/xrpc/app.bsky.feed.getAuthorFeed"))
+        .and(query_param("actor", DID))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "feed": [] })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session = seed_session(&dir, &server.uri(), "access-1", "refresh-1");
+    let (code, _, stderr) =
+        tokio::task::spawn_blocking(move || run(fulmar(&session).args(["me", "--json"])))
+            .await
+            .expect("join");
+    assert_eq!(code, 0, "stderr: {stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn notifs_previews_hydrate_liked_post() {
+    let server = MockServer::start().await;
+    let subject = format!("at://{DID}/app.bsky.feed.post/3orig");
+    Mock::given(method("GET"))
+        .and(path("/xrpc/app.bsky.notification.listNotifications"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "notifications": [{
+                "uri": "at://did:plc:fan/app.bsky.feed.like/3like",
+                "reason": "like",
+                "reasonSubject": subject,
+                "author": { "handle": "fan.test" },
+                "isRead": false,
+                "indexedAt": "2026-08-12T00:00:00Z",
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/xrpc/app.bsky.feed.getPosts"))
+        .and(query_param("uris", subject.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "posts": [{
+                "uri": subject,
+                "record": { "text": "the post that got liked" },
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session = seed_session(&dir, &server.uri(), "access-1", "refresh-1");
+    let (code, stdout, stderr) = tokio::task::spawn_blocking(move || {
+        run(fulmar(&session).args(["notifs", "--previews", "--json"]))
+    })
+    .await
+    .expect("join");
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let item: serde_json::Value =
+        serde_json::from_str(stdout.lines().next().expect("one line")).expect("json");
+    assert_eq!(item["$preview"]["text"], "the post that got liked");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn post_link_builds_external_embed_from_og_tags() {
+    let server = MockServer::start().await;
+    let article_url = format!("{}/article", server.uri());
+    Mock::given(method("GET"))
+        .and(path("/article"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"<html><head>
+                <meta property="og:title" content="Great Article">
+                <meta property="og:description" content="Worth reading.">
+            </head></html>"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/xrpc/com.atproto.repo.createRecord"))
+        .and(body_partial_json(json!({
+            "record": {
+                "embed": {
+                    "$type": "app.bsky.embed.external",
+                    "external": {
+                        "uri": article_url,
+                        "title": "Great Article",
+                        "description": "Worth reading.",
+                    },
+                },
+            },
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uri": format!("at://{DID}/app.bsky.feed.post/3link"),
+            "cid": "bafyreialinkpost",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session = seed_session(&dir, &server.uri(), "access-1", "refresh-1");
+    let url = article_url.clone();
+    let (code, _, stderr) = tokio::task::spawn_blocking(move || {
+        run(fulmar(&session).args(["post", "read this", "--link", &url]))
+    })
+    .await
+    .expect("join");
+    assert_eq!(code, 0, "stderr: {stderr}");
 }
 
 /// THE test: two real OS processes, one session file, an expired
