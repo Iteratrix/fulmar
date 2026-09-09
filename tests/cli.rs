@@ -461,3 +461,68 @@ async fn two_processes_racing_one_session_never_double_spend_a_refresh_token() {
         "chain must have advanced cleanly, got {final_refresh:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn view_blocked_post_exits_1_not_silent_0() {
+    let server = MockServer::start().await;
+    let uri = format!("at://{DID}/app.bsky.feed.post/3wall");
+    Mock::given(method("GET"))
+        .and(path("/xrpc/app.bsky.feed.getPostThread"))
+        .and(query_param("uri", uri.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "thread": {
+                "$type": "app.bsky.feed.defs#blockedPost",
+                "uri": uri,
+                "blocked": true,
+                "author": { "did": DID, "viewer": { "blockedBy": true } },
+            },
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session = seed_session(&dir, &server.uri(), "access-1", "refresh-1");
+    let args_uri = uri.clone();
+    let (code, stdout, stderr) = tokio::task::spawn_blocking(move || {
+        run(fulmar(&session).args(["view", args_uri.as_str(), "--json"]))
+    })
+    .await
+    .expect("join");
+
+    assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.is_empty(), "stdout: {stdout}");
+    assert!(stderr.contains("BlockedByActor"), "stderr: {stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn view_not_found_stub_exits_4() {
+    let server = MockServer::start().await;
+    let uri = format!("at://{DID}/app.bsky.feed.post/3gone");
+    Mock::given(method("GET"))
+        .and(path("/xrpc/app.bsky.feed.getPostThread"))
+        .and(query_param("uri", uri.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "thread": {
+                "$type": "app.bsky.feed.defs#notFoundPost",
+                "uri": uri,
+                "notFound": true,
+            },
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session = seed_session(&dir, &server.uri(), "access-1", "refresh-1");
+    let args_uri = uri.clone();
+    let (code, stdout, stderr) = tokio::task::spawn_blocking(move || {
+        run(fulmar(&session).args(["view", args_uri.as_str(), "--json"]))
+    })
+    .await
+    .expect("join");
+
+    assert_eq!(code, 4, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.is_empty(), "stdout: {stdout}");
+    assert!(stderr.contains("NotFound"), "stderr: {stderr}");
+}
