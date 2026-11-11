@@ -33,9 +33,8 @@ fn seeded_store(dir: &tempfile::TempDir, pds_url: &str) -> SessionStore {
     store
 }
 
-fn options(chat_url: &str) -> ClientOptions {
+fn options() -> ClientOptions {
     ClientOptions {
-        chat_url: chat_url.to_string(),
         plc_url: "http://plc.invalid".to_string(),
         video_url: "http://video.invalid".to_string(),
         http_timeout: Duration::from_secs(2),
@@ -86,7 +85,7 @@ async fn refresh_and_retry_persists_rotated_tokens() {
         .mount(&server)
         .await;
 
-    let client = Client::from_store(store.clone(), &options(&server.uri())).expect("client");
+    let client = Client::from_store(store.clone(), &options()).expect("client");
     let value = client
         .get(&Route::Pds, "app.bsky.feed.getTimeline", &[])
         .await
@@ -98,26 +97,26 @@ async fn refresh_and_retry_persists_rotated_tokens() {
     assert_eq!(on_disk.refresh_jwt, "refresh-2");
 }
 
-/// The chat service surfaces an aged-out access token as
-/// `400 ExpiredToken`, not 401. The same retry loop must cover it —
-/// a long-running caller once went silent for hours because retry
-/// only triggered on 401.
+/// An aged-out access token can come back as `400 ExpiredToken`, not
+/// 401. The same retry loop must cover it — a long-running caller once
+/// went silent for hours because retry only triggered on 401. The
+/// chat call and its retry both go to the PDS, with the proxy header.
 #[tokio::test]
 async fn expired_token_400_triggers_refresh_and_retry() {
     let pds = MockServer::start().await;
-    let chat = MockServer::start().await;
     let dir = tempfile::tempdir().expect("tempdir");
     let store = seeded_store(&dir, &pds.uri());
 
     Mock::given(method("GET"))
         .and(path("/xrpc/chat.bsky.convo.listConvos"))
         .and(header("authorization", "Bearer access-1"))
+        .and(header("atproto-proxy", super::CHAT_PROXY))
         .respond_with(
             ResponseTemplate::new(400)
                 .set_body_json(json!({ "error": "ExpiredToken", "message": "Token has expired" })),
         )
         .expect(1)
-        .mount(&chat)
+        .mount(&pds)
         .await;
     mount_refresh(&pds, "refresh-1", "access-2", "refresh-2").await;
     Mock::given(method("GET"))
@@ -126,10 +125,10 @@ async fn expired_token_400_triggers_refresh_and_retry() {
         .and(header("atproto-proxy", super::CHAT_PROXY))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "convos": [] })))
         .expect(1)
-        .mount(&chat)
+        .mount(&pds)
         .await;
 
-    let client = Client::from_store(store, &options(&chat.uri())).expect("client");
+    let client = Client::from_store(store, &options()).expect("client");
     let value = client
         .get(&Route::Chat, "chat.bsky.convo.listConvos", &[])
         .await
@@ -162,7 +161,7 @@ async fn real_400_does_not_refresh() {
         .mount(&server)
         .await;
 
-    let client = Client::from_store(store.clone(), &options(&server.uri())).expect("client");
+    let client = Client::from_store(store.clone(), &options()).expect("client");
     let err = client
         .post(&Route::Pds, "com.atproto.repo.createRecord", &json!({}))
         .await
@@ -204,7 +203,7 @@ async fn dead_refresh_chain_is_session_expired() {
         .mount(&server)
         .await;
 
-    let client = Client::from_store(store, &options(&server.uri())).expect("client");
+    let client = Client::from_store(store, &options()).expect("client");
     let err = client
         .get(&Route::Pds, "app.bsky.feed.getTimeline", &[])
         .await
@@ -224,7 +223,7 @@ async fn adopts_other_process_refresh_without_spending_token() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = seeded_store(&dir, &server.uri());
 
-    let client = Client::from_store(store.clone(), &options(&server.uri())).expect("client");
+    let client = Client::from_store(store.clone(), &options()).expect("client");
 
     store
         .save(&SessionFile::new(
@@ -277,7 +276,7 @@ async fn malformed_2xx_body_is_decode_error() {
         .mount(&server)
         .await;
 
-    let client = Client::from_store(store, &options(&server.uri())).expect("client");
+    let client = Client::from_store(store, &options()).expect("client");
     let err = client
         .get(&Route::Pds, "app.bsky.feed.getTimeline", &[])
         .await
@@ -307,7 +306,7 @@ async fn hung_server_times_out() {
 
     let opts = ClientOptions {
         http_timeout: Duration::from_millis(200),
-        ..options(&server.uri())
+        ..options()
     };
     let client = Client::from_store(store, &opts).expect("client");
     let err = client
@@ -337,7 +336,7 @@ async fn query_params_are_sent() {
         .mount(&server)
         .await;
 
-    let client = Client::from_store(store, &options(&server.uri())).expect("client");
+    let client = Client::from_store(store, &options()).expect("client");
     client
         .get(
             &Route::Pds,
@@ -382,7 +381,7 @@ async fn login_resolves_pds_from_did_doc() {
 
     Client::login(
         store.clone(),
-        &options("http://chat.invalid"),
+        &options(),
         &entryway.uri(),
         HANDLE,
         "app-password",
@@ -411,15 +410,9 @@ async fn login_bad_credentials_is_api_error() {
         .mount(&entryway)
         .await;
 
-    let err = Client::login(
-        store,
-        &options("http://chat.invalid"),
-        &entryway.uri(),
-        HANDLE,
-        "wrong",
-    )
-    .await
-    .expect_err("must fail");
+    let err = Client::login(store, &options(), &entryway.uri(), HANDLE, "wrong")
+        .await
+        .expect_err("must fail");
     let ApiError::Api {
         status: 401, kind, ..
     } = err

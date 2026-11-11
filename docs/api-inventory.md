@@ -50,8 +50,9 @@ JWT (`iss` = user DID, `aud` = target service DID, `lxm` = method, exp < 60s):
 Alternatively a client can mint its own service token with
 `com.atproto.server.getServiceAuth` (specifying `aud` and `lxm`) and hit the
 target service directly — this is how the official app talks to
-`video.bsky.app`, and it's the fallback for chat when the entryway 501s
-(see reference/muse-bluesky `CHAT_PROXY`).
+`video.bsky.app`. A login token sent straight to a target service is refused:
+`api.bsky.chat` answers 401 `BadJwtType` ("Invalid jwt type at+jwt") since
+2026-11-11.
 
 **Entryway gotchas.** `bsky.social` fronts many PDS hosts. Sessions created
 there work, but (a) chat routes 501 at the entryway — resolve the account's

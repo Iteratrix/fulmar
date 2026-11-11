@@ -207,5 +207,6 @@ Group *management* gets its own family:
 6. Pagination is a plain cursor loop rather than a `Stream`
    abstraction — same behavior, less machinery.
 7. Video uses `getServiceAuth` + direct calls to `video.bsky.app`;
-   chat uses the direct-to-`api.bsky.chat` route with the proxy
-   header (the reference client's battle-tested path).
+   chat goes to the user's PDS with the proxy header, and the PDS
+   relays it (the direct-to-`api.bsky.chat` route died 2026-11-11:
+   401 `BadJwtType` for a login token).

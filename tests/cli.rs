@@ -175,9 +175,11 @@ async fn post_sends_correct_facet_byte_offsets() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dm_send_routes_to_chat_service_with_proxy_header() {
+async fn dm_send_routes_through_the_pds_with_proxy_header() {
+    // Chat goes to the session's PDS, which relays it to api.bsky.chat.
+    // The chat service refuses a login token sent to it directly (401
+    // BadJwtType, since 2026-11-11), and bsky.social answers chat with 501.
     let pds = MockServer::start().await;
-    let chat = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/xrpc/com.atproto.identity.resolveHandle"))
         .respond_with(
@@ -193,7 +195,7 @@ async fn dm_send_routes_to_chat_service_with_proxy_header() {
             ResponseTemplate::new(200).set_body_json(json!({ "convo": { "id": "convo-77" } })),
         )
         .expect(1)
-        .mount(&chat)
+        .mount(&pds)
         .await;
     Mock::given(method("POST"))
         .and(path("/xrpc/chat.bsky.convo.sendMessage"))
@@ -206,19 +208,13 @@ async fn dm_send_routes_to_chat_service_with_proxy_header() {
             ResponseTemplate::new(200).set_body_json(json!({ "id": "msg-1", "text": "hello bob" })),
         )
         .expect(1)
-        .mount(&chat)
+        .mount(&pds)
         .await;
 
     let dir = tempfile::tempdir().expect("tempdir");
     let session = seed_session(&dir, &pds.uri(), "access-1", "refresh-1");
-    let chat_url = chat.uri();
     let (code, _, stderr) = tokio::task::spawn_blocking(move || {
-        run(fulmar(&session).env("FULMAR_CHAT_URL", chat_url).args([
-            "dm",
-            "send",
-            "bob.test",
-            "hello bob",
-        ]))
+        run(fulmar(&session).args(["dm", "send", "bob.test", "hello bob"]))
     })
     .await
     .expect("join");

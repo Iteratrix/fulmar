@@ -116,9 +116,10 @@ fn live_notifs_count() {
     assert!(value["count"].is_u64(), "got {value}");
 }
 
-/// The one that catches routing regressions no mock can: real
-/// `api.bsky.chat` with the proxy header, where `bsky.social` would
-/// 501.
+/// The one that catches routing regressions no mock can: the real PDS
+/// relaying to `api.bsky.chat` under the proxy header. `bsky.social`
+/// would 501, and `api.bsky.chat` called directly refuses the login
+/// token (401 `BadJwtType`, since 2026-11-11).
 #[test]
 fn live_dm_unread_reaches_chat_service() {
     let session = skip_without_session!();

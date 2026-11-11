@@ -29,10 +29,11 @@ terminal. Design consequences, in priority order:
   `chat.bsky.convo.updateRead`. DMs require the atproto service-proxy
   header `Atproto-Proxy: did:web:api.bsky.chat#bsky_chat` — and since
   ~2026-05, `bsky.social` returns **501** for chat routes even with
-  the header; you must resolve and hit the chat service / user's PDS
-  directly. The reference client handles this correctly (see
-  `CHAT_PROXY` in reference/muse-bluesky/src/client.rs and its
-  comment).
+  the header. Send them to the user's own PDS (resolved from the DID
+  document), which relays them. Not to `api.bsky.chat` directly:
+  since 2026-11-11 it refuses a login token with 401 `BadJwtType`
+  ("Invalid jwt type at+jwt"), and the reference client's direct
+  route broke that day.
 - **Session persistence with file locking.** The createSession
   endpoint enforces ~100/day at the entryway (documented 300/day is
   wrong — see survey). A CLI that logs in per invocation is
