@@ -12,7 +12,7 @@ use serde_json::json;
 use wiremock::matchers::{body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{ApiError, Client, ClientOptions, Route};
+use super::{ApiError, Client, ClientOptions, Route, pds_for_session};
 use crate::identifiers::{Did, Handle};
 use crate::session::{SessionFile, SessionStore};
 
@@ -392,6 +392,38 @@ async fn login_resolves_pds_from_did_doc() {
     let session = store.load().expect("persisted");
     assert_eq!(session.pds_url, "https://real-pds.example.com");
     assert_eq!(session.did.as_str(), DID);
+}
+
+/// After an HTTPS login, a PDS without HTTPS is refused: the session's
+/// tokens, DMs included, would travel to it in the clear.
+#[test]
+fn pds_on_weaker_transport_than_login_is_refused() {
+    let entryway = "https://bsky.social";
+    for pds in [
+        "http://pds.example.com",
+        "HTTP://pds.example.com",
+        "pds.example.com",
+        "",
+    ] {
+        assert_eq!(
+            pds_for_session(pds.to_string(), entryway),
+            entryway,
+            "{pds:?}"
+        );
+    }
+    for pds in ["https://pds.example.com", "HTTPS://pds.example.com"] {
+        assert_eq!(pds_for_session(pds.to_string(), entryway), pds, "{pds:?}");
+    }
+}
+
+/// After a plain-HTTP login (the loopback wiremock suites) the PDS is
+/// kept whatever its scheme: it is no weaker than the login itself.
+#[test]
+fn pds_is_kept_when_the_login_was_plain_http() {
+    let entryway = "http://127.0.0.1:1234";
+    for pds in ["http://127.0.0.1:5678", "https://pds.example.com"] {
+        assert_eq!(pds_for_session(pds.to_string(), entryway), pds);
+    }
 }
 
 /// Bad credentials surface the server's structured error.

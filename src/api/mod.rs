@@ -226,7 +226,9 @@ impl Client {
     /// that ever sees a password. Resolves the account's real PDS
     /// endpoint from the DID document in the `createSession` response
     /// (falling back to directory resolution) so subsequent calls —
-    /// chat included — hit the right host even on a custom PDS.
+    /// chat included — hit the right host even on a custom PDS. A PDS
+    /// on a weaker transport than `service_url` is refused (see
+    /// `pds_for_session`).
     ///
     /// # Errors
     ///
@@ -248,7 +250,7 @@ impl Client {
         let bytes = resp.bytes().await?;
         let wire: WireSession = decode_xrpc(status, &bytes)?;
 
-        let pds_url = match wire.did_doc.as_ref().and_then(identity::pds_endpoint) {
+        let resolved = match wire.did_doc.as_ref().and_then(identity::pds_endpoint) {
             Some(url) => url,
             None => identity::resolve_pds_via_directory(&http, &options.plc_url, &wire.did)
                 .await
@@ -257,6 +259,7 @@ impl Client {
                     service_url.to_string()
                 }),
         };
+        let pds_url = pds_for_session(resolved, service_url);
 
         let session = SessionFile::new(
             wire.did,
@@ -586,6 +589,31 @@ impl Client {
         *self.session.write().await = new_session;
         Ok(())
     }
+}
+
+/// The PDS a new session talks to: `resolved`, unless that would send
+/// the tokens (DMs included) over a weaker transport than the login
+/// used. Then `service_url`, where chat fails visibly instead of
+/// travelling in the clear. The PDS comes from the DID document, which
+/// the account's rotation keys control, not this client.
+fn pds_for_session(resolved: String, service_url: &str) -> String {
+    if downgrades_transport(&resolved, service_url) {
+        warn!("the DID document's PDS {resolved} isn't https; staying on {service_url}");
+        return service_url.to_string();
+    }
+    resolved
+}
+
+/// True when `service_url` is HTTPS but `pds` isn't (plain HTTP, or no
+/// scheme at all). Judged against `service_url` rather than demanding
+/// HTTPS outright, so the wiremock suites, which run on loopback HTTP,
+/// keep the PDS route.
+fn downgrades_transport(pds: &str, service_url: &str) -> bool {
+    let https = |url: &str| {
+        url.get(..8)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+    };
+    https(service_url) && !https(pds)
 }
 
 fn xrpc_url(base: &str, nsid: &str) -> String {
