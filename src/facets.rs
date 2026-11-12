@@ -276,9 +276,15 @@ mod tests {
             .collect()
     }
 
+    /// Asserts nothing was detected; a failure prints what was.
+    #[track_caller]
+    fn assert_none<T: std::fmt::Debug + PartialEq>(found: &[T]) {
+        assert_eq!(found, &[] as &[T]);
+    }
+
     #[test]
     fn plain_text_has_no_facets() {
-        assert!(detect_facets("just some words here").is_empty());
+        assert_none(&detect_facets("just some words here"));
     }
 
     #[test]
@@ -295,7 +301,7 @@ mod tests {
 
     #[test]
     fn mention_with_invalid_tld_is_skipped() {
-        assert!(mentions("@alice.notarealtldxyz hi").is_empty());
+        assert_none(&mentions("@alice.notarealtldxyz hi"));
     }
 
     #[test]
@@ -305,7 +311,7 @@ mod tests {
 
     #[test]
     fn mention_mid_word_is_not_a_mention() {
-        assert!(mentions("email@example.com").is_empty());
+        assert_none(&mentions("email@example.com"));
     }
 
     #[test]
@@ -333,7 +339,7 @@ mod tests {
 
     #[test]
     fn bare_domain_with_bad_tld_is_skipped() {
-        assert!(links("see example.notarealtldxyz now").is_empty());
+        assert_none(&links("see example.notarealtldxyz now"));
     }
 
     #[test]
@@ -378,7 +384,7 @@ mod tests {
 
     #[test]
     fn tag_all_digits_is_skipped() {
-        assert!(tags("#1234 nope").is_empty());
+        assert_none(&tags("#1234 nope"));
     }
 
     #[test]
@@ -393,13 +399,13 @@ mod tests {
 
     #[test]
     fn tag_variation_selector_start_is_skipped() {
-        assert!(tags("#\u{FE0F}x").is_empty());
+        assert_none(&tags("#\u{FE0F}x"));
     }
 
     #[test]
     fn tag_over_64_graphemes_is_skipped() {
         let long = "x".repeat(65);
-        assert!(tags(&format!("#{long}")).is_empty());
+        assert_none(&tags(&format!("#{long}")));
         let ok = "x".repeat(64);
         assert_eq!(tags(&format!("#{ok}")).len(), 1);
     }
@@ -416,7 +422,7 @@ mod tests {
 
     #[test]
     fn tag_mid_word_hash_is_not_a_tag() {
-        assert!(tags("c#never").is_empty());
+        assert_none(&tags("c#never"));
     }
 
     #[test]
@@ -434,19 +440,19 @@ mod tests {
 
     #[test]
     fn cashtag_too_long_is_skipped() {
-        assert!(tags("not $TOOLONG okay").is_empty());
+        assert_none(&tags("not $TOOLONG okay"));
     }
 
     #[test]
     fn cashtag_needs_delimiter() {
-        assert!(tags("$TSLA5X").is_empty());
+        assert_none(&tags("$TSLA5X"));
         assert_eq!(tags("$TSLA"), vec!["$TSLA"]);
         assert_eq!(tags("($TSLA)"), vec!["$TSLA"]);
     }
 
     #[test]
     fn cashtag_must_start_with_letter() {
-        assert!(tags("$5X").is_empty());
+        assert_none(&tags("$5X"));
     }
 
     #[test]

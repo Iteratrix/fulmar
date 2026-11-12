@@ -23,9 +23,12 @@
 //! ## Chat routing
 //!
 //! `chat.bsky.*` calls carry `atproto-proxy:
-//! did:web:api.bsky.chat#bsky_chat` AND go directly to the chat
-//! service base URL rather than the PDS: `bsky.social` stopped
-//! proxying chat methods and returns 501 for them (observed 2026-05).
+//! did:web:api.bsky.chat#bsky_chat` and go to the account's own PDS
+//! (the session's `pds_url`), which relays them under a service token
+//! it signs for that one method. The two other routes are dead:
+//! `bsky.social` answers chat with 501 (since 2026-05), and
+//! `api.bsky.chat` called directly has refused the login token with
+//! `401 BadJwtType: Invalid jwt type "at+jwt"` since 2026-11-11.
 
 pub mod helpers;
 pub mod identity;
@@ -41,9 +44,6 @@ use crate::session::{SessionError, SessionFile, SessionStore};
 
 /// `atproto-proxy` header value for Bluesky chat (DM) routes.
 pub const CHAT_PROXY: &str = "did:web:api.bsky.chat#bsky_chat";
-
-/// Default chat service base URL (`did:web:api.bsky.chat`).
-pub const DEFAULT_CHAT_URL: &str = "https://api.bsky.chat";
 
 /// Default entryway for `fulmar login` when the handle doesn't
 /// resolve elsewhere.
@@ -91,7 +91,7 @@ pub enum Route {
     /// `app.bsky.*` reads (which the PDS service-proxies to the
     /// `AppView` by default).
     Pds,
-    /// The chat service directly, with the chat proxy header.
+    /// The user's PDS with the chat proxy header; the PDS relays it.
     Chat,
     /// The user's PDS with an explicit `atproto-proxy` header
     /// (labelers, video, `fulmar api --proxy`).
@@ -102,7 +102,6 @@ pub enum Route {
 /// wiremock.
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
-    pub chat_url: String,
     pub plc_url: String,
     pub video_url: String,
     pub http_timeout: std::time::Duration,
@@ -111,7 +110,6 @@ pub struct ClientOptions {
 impl Default for ClientOptions {
     fn default() -> Self {
         Self {
-            chat_url: DEFAULT_CHAT_URL.to_string(),
             plc_url: identity::PLC_DIRECTORY.to_string(),
             video_url: DEFAULT_VIDEO_URL.to_string(),
             http_timeout: std::time::Duration::from_secs(30),
@@ -120,16 +118,12 @@ impl Default for ClientOptions {
 }
 
 impl ClientOptions {
-    /// Defaults, overridable by `FULMAR_CHAT_URL`, `FULMAR_PLC_URL`,
-    /// `FULMAR_VIDEO_URL`, and `FULMAR_TIMEOUT` (seconds). For tests
-    /// and self-hosted service deployments; normal use never sets
-    /// these.
+    /// Defaults, overridable by `FULMAR_PLC_URL`, `FULMAR_VIDEO_URL`,
+    /// and `FULMAR_TIMEOUT` (seconds). For tests and self-hosted
+    /// service deployments; normal use never sets these.
     #[must_use]
     pub fn from_env() -> Self {
         let mut options = Self::default();
-        if let Ok(url) = std::env::var("FULMAR_CHAT_URL") {
-            options.chat_url = url;
-        }
         if let Ok(url) = std::env::var("FULMAR_PLC_URL") {
             options.plc_url = url;
         }
@@ -194,7 +188,6 @@ pub struct Client {
     store: SessionStore,
     session: RwLock<SessionFile>,
     refresh_serial: Mutex<()>,
-    chat_url: String,
     video_url: String,
 }
 
@@ -203,7 +196,7 @@ impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Client")
             .field("store", &self.store)
-            .field("chat_url", &self.chat_url)
+            .field("video_url", &self.video_url)
             .finish_non_exhaustive()
     }
 }
@@ -225,7 +218,6 @@ impl Client {
             store,
             session: RwLock::new(session),
             refresh_serial: Mutex::new(()),
-            chat_url: options.chat_url.clone(),
             video_url: options.video_url.clone(),
         })
     }
@@ -234,7 +226,9 @@ impl Client {
     /// that ever sees a password. Resolves the account's real PDS
     /// endpoint from the DID document in the `createSession` response
     /// (falling back to directory resolution) so subsequent calls —
-    /// chat included — hit the right host even on a custom PDS.
+    /// chat included — hit the right host even on a custom PDS. A PDS
+    /// on a weaker transport than `service_url` is refused (see
+    /// `pds_for_session`).
     ///
     /// # Errors
     ///
@@ -256,7 +250,7 @@ impl Client {
         let bytes = resp.bytes().await?;
         let wire: WireSession = decode_xrpc(status, &bytes)?;
 
-        let pds_url = match wire.did_doc.as_ref().and_then(identity::pds_endpoint) {
+        let resolved = match wire.did_doc.as_ref().and_then(identity::pds_endpoint) {
             Some(url) => url,
             None => identity::resolve_pds_via_directory(&http, &options.plc_url, &wire.did)
                 .await
@@ -265,6 +259,7 @@ impl Client {
                     service_url.to_string()
                 }),
         };
+        let pds_url = pds_for_session(resolved, service_url);
 
         let session = SessionFile::new(
             wire.did,
@@ -279,7 +274,6 @@ impl Client {
             store,
             session: RwLock::new(session),
             refresh_serial: Mutex::new(()),
-            chat_url: options.chat_url.clone(),
             video_url: options.video_url.clone(),
         })
     }
@@ -516,10 +510,7 @@ impl Client {
         body: Option<&Value>,
         jwt: &str,
     ) -> Result<(StatusCode, Vec<u8>), ApiError> {
-        let base = match route {
-            Route::Chat => self.chat_url.clone(),
-            Route::Pds | Route::Proxied(_) => self.session.read().await.pds_url.clone(),
-        };
+        let base = self.session.read().await.pds_url.clone();
         let url = xrpc_url(&base, nsid);
         let mut req = match body {
             Some(body) => self.http.post(&url).json(body),
@@ -598,6 +589,31 @@ impl Client {
         *self.session.write().await = new_session;
         Ok(())
     }
+}
+
+/// The PDS a new session talks to: `resolved`, unless that would send
+/// the tokens (DMs included) over a weaker transport than the login
+/// used. Then `service_url`, where chat fails visibly instead of
+/// travelling in the clear. The PDS comes from the DID document, which
+/// the account's rotation keys control, not this client.
+fn pds_for_session(resolved: String, service_url: &str) -> String {
+    if downgrades_transport(&resolved, service_url) {
+        warn!("the DID document's PDS {resolved} isn't https; staying on {service_url}");
+        return service_url.to_string();
+    }
+    resolved
+}
+
+/// True when `service_url` is HTTPS but `pds` isn't (plain HTTP, or no
+/// scheme at all). Judged against `service_url` rather than demanding
+/// HTTPS outright, so the wiremock suites, which run on loopback HTTP,
+/// keep the PDS route.
+fn downgrades_transport(pds: &str, service_url: &str) -> bool {
+    let https = |url: &str| {
+        url.get(..8)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+    };
+    https(service_url) && !https(pds)
 }
 
 fn xrpc_url(base: &str, nsid: &str) -> String {
