@@ -45,6 +45,9 @@ pub async fn view(ctx: &Ctx, post: &str, depth: u32, parents: u32) -> anyhow::Re
     };
     let mut posts = Vec::new();
     flatten_thread(thread, &mut posts);
+    if posts.is_empty() {
+        return Err(thread_unavailable(thread, uri.as_str()).into());
+    }
     for post in &posts {
         ctx.out.item(post, render_post);
     }
@@ -78,6 +81,43 @@ fn flatten_replies(node: &Value, out: &mut Vec<Value>) {
     };
     for reply in replies {
         flatten_replies(reply, out);
+    }
+}
+
+/// `getPostThread` answers a blocked or missing post with a `2xx` whose
+/// `thread` is a `#blockedPost` / `#notFoundPost` stub carrying no `post`
+/// field, so flattening yields nothing and `view` used to print nothing
+/// and exit 0 — the one silent face in the CLI. Turn the stub into the
+/// same `ApiError::Api` the profile path raises, keeping the status the
+/// server actually sent and letting `kind` carry the meaning
+/// (`BlockedByActor` / `BlockedActor` → exit 1, `NotFound` → exit 4).
+fn thread_unavailable(thread: &Value, uri: &str) -> ApiError {
+    let root = thread.get("$type").and_then(Value::as_str).unwrap_or("");
+    match root {
+        "app.bsky.feed.defs#blockedPost" => {
+            let blocked_by = thread
+                .pointer("/author/viewer/blockedBy")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let kind = if blocked_by {
+                "BlockedByActor"
+            } else {
+                "BlockedActor"
+            };
+            ApiError::Api {
+                status: 200,
+                kind: kind.into(),
+                message: format!("getPostThread returned a blockedPost stub for {uri}"),
+            }
+        }
+        "app.bsky.feed.defs#notFoundPost" => ApiError::Api {
+            status: 200,
+            kind: "NotFound".into(),
+            message: format!("getPostThread returned a notFoundPost stub for {uri}"),
+        },
+        other => ApiError::Unexpected(format!(
+            "getPostThread thread for {uri} carried no posts (root $type {other:?})"
+        )),
     }
 }
 
