@@ -1,0 +1,18 @@
+# cargo-deny configuration. Only the advisories check is configured:
+# `cargo deny check advisories` (RustSec advisories and yanked crates).
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # chrono is unmaintained (no vulnerability reported): its maintainer
+    # wound it down in 2026 and recommends jiff. fulmar uses it for the
+    # createdAt of the records it writes, the seen-at time it marks on
+    # notifications, and the session's age, so leaving it is a migration,
+    # not a bump. Remove this entry when fulmar moves off chrono.
+    "RUSTSEC-2026-0543",
+    # paste is unmaintained (no vulnerability reported). It is a proc macro,
+    # so it runs only at compile time, and it arrives only through the image
+    # crate's AVIF encoder (rav1e) and EXR codec (exr, via pulp). Remove this
+    # entry when image drops it.
+    "RUSTSEC-2024-0436",
+]
