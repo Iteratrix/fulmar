@@ -1,0 +1,32 @@
+# Weekly dependency updates, grouped to keep PR noise down.
+# Security fixes come separately, as soon as an advisory lands, once
+# Dependabot alerts and security updates are on in the repo's settings.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: America/Los_Angeles
+    # Skip releases younger than a week: most yanked or compromised
+    # releases are caught within days.
+    cooldown:
+      default-days: 7
+    groups:
+      cargo-patch:
+        update-types: [patch]
+      cargo-minor:
+        update-types: [minor]
+    # Majors get their own PRs. For 0.x crates a minor bump (0.13 -> 0.14) is
+    # breaking in Cargo's eyes, so the minor group may need a code fix.
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+      timezone: America/Los_Angeles
+    groups:
+      actions:
+        patterns: ["*"]
