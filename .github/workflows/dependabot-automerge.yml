@@ -1,0 +1,60 @@
+name: Dependabot auto-merge
+
+# Merges a Dependabot PR by itself once every other check on its head commit
+# has passed: patch, minor and major bumps alike. A red or cancelled check
+# leaves the PR open for a human. This polls the checks instead of using
+# GitHub's own auto-merge, which only waits for checks that branch protection
+# marks as required. At least one check must have succeeded, so a PR whose
+# CI skipped everything is never merged untested.
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  automerge:
+    name: automerge
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Wait for the other checks, then merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Give the other workflows time to register their check runs.
+          sleep 60
+          while :; do
+            runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name != "automerge")]')
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
+            failed=$(jq -r '[.[] | select(.status == "completed"
+              and (.conclusion | IN("success", "skipped", "neutral") | not))
+              | .name] | join(", ")' <<<"$runs")
+            passed=$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")
+            if [ -n "$failed" ]; then
+              echo "::notice::Not merging: $failed did not pass."
+              exit 0
+            fi
+            if [ "$pending" -eq 0 ] && [ "$passed" -gt 0 ]; then
+              break
+            fi
+            if [ "$pending" -eq 0 ]; then
+              echo "::notice::Not merging: no check ran on this PR."
+              exit 0
+            fi
+            sleep 30
+          done
+          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$SHA"
