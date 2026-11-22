@@ -7,6 +7,10 @@ yanked = "deny"
 # (cargo-deny's default): rustix's RUSTSEC-2026-0486 reached fulmar through
 # tempfile and only cargo-audit showed it (the fulmar#3 review).
 unsound = "all"
+# Same for unmaintained advisories: the default ("workspace") reports only
+# crates the workspace depends on directly, so the paste entry below
+# never fired and cargo-deny flagged it advisory-not-detected.
+unmaintained = "all"
 ignore = [
     # chrono is unmaintained (no vulnerability reported): its maintainer
     # wound it down in 2026 and recommends jiff. fulmar uses it for the
