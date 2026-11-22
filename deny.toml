@@ -3,6 +3,10 @@
 
 [advisories]
 yanked = "deny"
+# Report unsound advisories in every crate, not only in direct dependencies
+# (cargo-deny's default): rustix's RUSTSEC-2026-0486 reached fulmar through
+# tempfile and only cargo-audit showed it (the fulmar#3 review).
+unsound = "all"
 ignore = [
     # chrono is unmaintained (no vulnerability reported): its maintainer
     # wound it down in 2026 and recommends jiff. fulmar uses it for the
